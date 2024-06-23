@@ -12,6 +12,7 @@ from .metrics import bbox_iou, probiou
 from .tal import bbox2dist
 
 
+print("----------***************** loss Updated ******************---------------------")
 class VarifocalLoss(nn.Module):
     """
     Varifocal loss by Zhang et al.
@@ -34,31 +35,100 @@ class VarifocalLoss(nn.Module):
                 .sum()
             )
         return loss
-
-
 class FocalLoss(nn.Module):
-    """Wraps focal loss around existing loss_fcn(), i.e. criteria = FocalLoss(nn.BCEWithLogitsLoss(), gamma=1.5)."""
+    def __init__(self, gamma=2.0, alpha=0.25, lambda_=0.5, k=1.0):
+        super(FocalLoss, self).__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+        self.lambda_ = lambda_
+        self.k = k
 
-    def __init__(self):
-        """Initializer for FocalLoss class with no parameters."""
-        super().__init__()
+    def forward(self, logits, targets):
+        """
+        Args:
+            logits (tensor): Predicted logits from the model
+            targets (tensor): Ground truth targets
+        """
+        # Compute the bounding box areas
+        areas = compute_bounding_box_areas(targets)
 
-    @staticmethod
-    def forward(pred, label, gamma=1.5, alpha=0.25):
-        """Calculates and updates confusion matrix for object detection/classification tasks."""
-        loss = F.binary_cross_entropy_with_logits(pred, label, reduction="none")
-        # p_t = torch.exp(-loss)
-        # loss *= self.alpha * (1.000001 - p_t) ** self.gamma  # non-zero power for gradient stability
+        # Compute the adaptive focusing parameter gamma
+        gamma = self.gamma * torch.exp(-self.lambda_ * areas)
 
-        # TF implementation https://github.com/tensorflow/addons/blob/v0.7.1/tensorflow_addons/losses/focal_loss.py
-        pred_prob = pred.sigmoid()  # prob from logits
-        p_t = label * pred_prob + (1 - label) * (1 - pred_prob)
-        modulating_factor = (1.0 - p_t) ** gamma
-        loss *= modulating_factor
-        if alpha > 0:
-            alpha_factor = label * alpha + (1 - label) * (1 - alpha)
-            loss *= alpha_factor
-        return loss.mean(1).sum()
+        # Compute the size-aware weighting factor
+        weights = torch.max(torch.ones_like(areas), self.k / torch.sqrt(areas))
+
+        # Compute the Focal Loss with adaptive focusing and size-aware weighting
+        bce_loss = F.binary_cross_entropy_with_logits(logits, targets, reduction='none')
+        pt = torch.exp(-bce_loss)
+        focal_loss = self.alpha * (1 - pt) ** gamma * bce_loss
+
+        # Apply size-aware weighting
+        weighted_focal_loss = weights * focal_loss
+
+        return weighted_focal_loss.mean()
+
+def compute_bounding_box_areas(targets):
+    """
+    Compute the areas of the bounding boxes from the target tensor.
+    This function assumes that the target tensor has the following format:
+    [batch_size, num_boxes, (x1, y1, x2, y2)]
+    """
+    # Extract the bounding box coordinates
+    x1, y1, x2, y2 = targets[:, :, 0], targets[:, :, 1], targets[:, :, 2], targets[:, :, 3]
+
+    # Compute the areas
+    areas = (x2 - x1) * (y2 - y1)
+
+    return areas
+
+# class VarifocalLoss(nn.Module):
+#     """
+#     Varifocal loss by Zhang et al.
+
+#     https://arxiv.org/abs/2008.13367.
+#     """
+
+#     def __init__(self):
+#         """Initialize the VarifocalLoss class."""
+#         super().__init__()
+
+#     @staticmethod
+#     def forward(pred_score, gt_score, label, alpha=0.75, gamma=2.0):
+#         """Computes varfocal loss."""
+#         weight = alpha * pred_score.sigmoid().pow(gamma) * (1 - label) + gt_score * label
+#         with torch.cuda.amp.autocast(enabled=False):
+#             loss = (
+#                 (F.binary_cross_entropy_with_logits(pred_score.float(), gt_score.float(), reduction="none") * weight)
+#                 .mean(1)
+#                 .sum()
+#             )
+#         return loss
+
+
+# class FocalLoss(nn.Module):
+#     """Wraps focal loss around existing loss_fcn(), i.e. criteria = FocalLoss(nn.BCEWithLogitsLoss(), gamma=1.5)."""
+
+#     def __init__(self):
+#         """Initializer for FocalLoss class with no parameters."""
+#         super().__init__()
+
+#     @staticmethod
+#     def forward(pred, label, gamma=1.5, alpha=0.25):
+#         """Calculates and updates confusion matrix for object detection/classification tasks."""
+#         loss = F.binary_cross_entropy_with_logits(pred, label, reduction="none")
+#         # p_t = torch.exp(-loss)
+#         # loss *= self.alpha * (1.000001 - p_t) ** self.gamma  # non-zero power for gradient stability
+
+#         # TF implementation https://github.com/tensorflow/addons/blob/v0.7.1/tensorflow_addons/losses/focal_loss.py
+#         pred_prob = pred.sigmoid()  # prob from logits
+#         p_t = label * pred_prob + (1 - label) * (1 - pred_prob)
+#         modulating_factor = (1.0 - p_t) ** gamma
+#         loss *= modulating_factor
+#         if alpha > 0:
+#             alpha_factor = label * alpha + (1 - label) * (1 - alpha)
+#             loss *= alpha_factor
+#         return loss.mean(1).sum()
 
 
 class BboxLoss(nn.Module):
