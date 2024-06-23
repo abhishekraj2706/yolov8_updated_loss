@@ -11,7 +11,7 @@ from ultralytics.utils.tal import RotatedTaskAlignedAssigner, TaskAlignedAssigne
 from .metrics import bbox_iou, probiou
 from .tal import bbox2dist
 
-print("----------***************** loss Updated ******************---------------------")
+
 class VarifocalLoss(nn.Module):
     """
     Varifocal loss by Zhang et al.
@@ -34,76 +34,31 @@ class VarifocalLoss(nn.Module):
                 .sum()
             )
         return loss
+
+
 class FocalLoss(nn.Module):
-    def __init__(self, gamma=2.0, alpha=0.25, lambda_=0.5, k=1.0):
-        super(FocalLoss, self).__init__()
-        self.gamma = gamma
-        self.alpha = alpha
-        self.lambda_ = lambda_
-        self.k = k
+    """Wraps focal loss around existing loss_fcn(), i.e. criteria = FocalLoss(nn.BCEWithLogitsLoss(), gamma=1.5)."""
 
-    def forward(self, logits, targets):
-        """
-        Args:
-            logits (tensor): Predicted logits from the model
-            targets (tensor): Ground truth targets
-        """
-        # Compute the bounding box areas
-        areas = compute_bounding_box_areas(targets)
+    def __init__(self):
+        """Initializer for FocalLoss class with no parameters."""
+        super().__init__()
 
-        # Compute the adaptive focusing parameter gamma
-        gamma = self.gamma * torch.exp(-self.lambda_ * areas)
+    @staticmethod
+    def forward(pred, label, gamma=1.5, alpha=0.25):
+        """Calculates and updates confusion matrix for object detection/classification tasks."""
+        loss = F.binary_cross_entropy_with_logits(pred, label, reduction="none")
+        # p_t = torch.exp(-loss)
+        # loss *= self.alpha * (1.000001 - p_t) ** self.gamma  # non-zero power for gradient stability
 
-        # Compute the size-aware weighting factor
-        weights = torch.max(torch.ones_like(areas), self.k / torch.sqrt(areas))
-
-        # Compute the Focal Loss with adaptive focusing and size-aware weighting
-        bce_loss = F.binary_cross_entropy_with_logits(logits, targets, reduction='none')
-        pt = torch.exp(-bce_loss)
-        focal_loss = self.alpha * (1 - pt) ** gamma * bce_loss
-
-        # Apply size-aware weighting
-        weighted_focal_loss = weights * focal_loss
-
-        return weighted_focal_loss.mean()
-
-def compute_bounding_box_areas(targets):
-    """
-    Compute the areas of the bounding boxes from the target tensor.
-    This function assumes that the target tensor has the following format:
-    [batch_size, num_boxes, (x1, y1, x2, y2)]
-    """
-    # Extract the bounding box coordinates
-    x1, y1, x2, y2 = targets[:, :, 0], targets[:, :, 1], targets[:, :, 2], targets[:, :, 3]
-
-    # Compute the areas
-    areas = (x2 - x1) * (y2 - y1)
-
-    return areas
-
-# class FocalLoss(nn.Module):
-#     """Wraps focal loss around existing loss_fcn(), i.e. criteria = FocalLoss(nn.BCEWithLogitsLoss(), gamma=1.5)."""
-
-#     def __init__(self):
-#         """Initializer for FocalLoss class with no parameters."""
-#         super().__init__()
-
-#     @staticmethod
-#     def forward(pred, label, gamma=1.5, alpha=0.25):
-#         """Calculates and updates confusion matrix for object detection/classification tasks."""
-#         loss = F.binary_cross_entropy_with_logits(pred, label, reduction="none")
-#         # p_t = torch.exp(-loss)
-#         # loss *= self.alpha * (1.000001 - p_t) ** self.gamma  # non-zero power for gradient stability
-
-#         # TF implementation https://github.com/tensorflow/addons/blob/v0.7.1/tensorflow_addons/losses/focal_loss.py
-#         pred_prob = pred.sigmoid()  # prob from logits
-#         p_t = label * pred_prob + (1 - label) * (1 - pred_prob)
-#         modulating_factor = (1.0 - p_t) ** gamma
-#         loss *= modulating_factor
-#         if alpha > 0:
-#             alpha_factor = label * alpha + (1 - label) * (1 - alpha)
-#             loss *= alpha_factor
-#         return loss.mean(1).sum()
+        # TF implementation https://github.com/tensorflow/addons/blob/v0.7.1/tensorflow_addons/losses/focal_loss.py
+        pred_prob = pred.sigmoid()  # prob from logits
+        p_t = label * pred_prob + (1 - label) * (1 - pred_prob)
+        modulating_factor = (1.0 - p_t) ** gamma
+        loss *= modulating_factor
+        if alpha > 0:
+            alpha_factor = label * alpha + (1 - label) * (1 - alpha)
+            loss *= alpha_factor
+        return loss.mean(1).sum()
 
 
 class BboxLoss(nn.Module):
@@ -193,7 +148,7 @@ class KeypointLoss(nn.Module):
 class v8DetectionLoss:
     """Criterion class for computing training losses."""
 
-    def __init__(self, model):  # model must be de-paralleled
+    def __init__(self, model, tal_topk=10):  # model must be de-paralleled
         """Initializes v8DetectionLoss with the model, defining model-related properties and BCE loss function."""
         device = next(model.parameters()).device  # get model device
         h = model.args  # hyperparameters
@@ -209,7 +164,7 @@ class v8DetectionLoss:
 
         self.use_dfl = m.reg_max > 1
 
-        self.assigner = TaskAlignedAssigner(topk=10, num_classes=self.nc, alpha=0.5, beta=6.0)
+        self.assigner = TaskAlignedAssigner(topk=tal_topk, num_classes=self.nc, alpha=0.5, beta=6.0)
         self.bbox_loss = BboxLoss(m.reg_max - 1, use_dfl=self.use_dfl).to(device)
         self.proj = torch.arange(m.reg_max, dtype=torch.float, device=device)
 
@@ -759,3 +714,21 @@ class v8OBBLoss(v8DetectionLoss):
             b, a, c = pred_dist.shape  # batch, anchors, channels
             pred_dist = pred_dist.view(b, a, 4, c // 4).softmax(3).matmul(self.proj.type(pred_dist.dtype))
         return torch.cat((dist2rbox(pred_dist, pred_angle, anchor_points), pred_angle), dim=-1)
+
+
+class E2EDetectLoss:
+    """Criterion class for computing training losses."""
+
+    def __init__(self, model):
+        """Initialize E2EDetectLoss with one-to-many and one-to-one detection losses using the provided model."""
+        self.one2many = v8DetectionLoss(model, tal_topk=10)
+        self.one2one = v8DetectionLoss(model, tal_topk=1)
+
+    def __call__(self, preds, batch):
+        """Calculate the sum of the loss for box, cls and dfl multiplied by batch size."""
+        preds = preds[1] if isinstance(preds, tuple) else preds
+        one2many = preds["one2many"]
+        loss_one2many = self.one2many(one2many, batch)
+        one2one = preds["one2one"]
+        loss_one2one = self.one2one(one2one, batch)
+        return loss_one2many[0] + loss_one2one[0], loss_one2many[1] + loss_one2one[1]
