@@ -153,23 +153,36 @@ class Focus(nn.Module):
         return self.conv(torch.cat((x[..., ::2, ::2], x[..., 1::2, ::2], x[..., ::2, 1::2], x[..., 1::2, 1::2]), 1))
         # return self.conv(self.contract(x))
 
-
-class GhostConv(nn.Module):
-    """Ghost Convolution https://github.com/huawei-noah/ghostnet."""
-
-    def __init__(self, c1, c2, k=1, s=1, g=1, act=True):
-        """Initializes the GhostConv object with input channels, output channels, kernel size, stride, groups and
-        activation.
-        """
+class GhostConv(nn.Module):       #bottlenet
+    """Standard bottleneck."""
+    def __init__(self, c1, c2, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, shortcut, groups, expansion
         super().__init__()
-        c_ = c2 // 2  # hidden channels
-        self.cv1 = Conv(c1, c_, k, s, None, g, act=act)
-        self.cv2 = Conv(c_, c_, 5, 1, None, c_, act=act)
+        c_ = int(c2 * e)  # hidden channels
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c_, c2, 3, 1, g=g)
+        self.add = shortcut and c1 == c2
 
     def forward(self, x):
-        """Forward propagation through a Ghost Bottleneck layer with skip connection."""
-        y = self.cv1(x)
-        return torch.cat((y, self.cv2(y)), 1)
+        """Apply bottleneck."""
+        return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
+
+
+# class GhostConv(nn.Module):
+#     """Ghost Convolution https://github.com/huawei-noah/ghostnet."""
+
+#     def __init__(self, c1, c2, k=1, s=1, g=1, act=True):
+#         """Initializes the GhostConv object with input channels, output channels, kernel size, stride, groups and
+#         activation.
+#         """
+#         super().__init__()
+#         c_ = c2 // 2  # hidden channels
+#         self.cv1 = Conv(c1, c_, k, s, None, g, act=act)
+#         self.cv2 = Conv(c_, c_, 5, 1, None, c_, act=act)
+
+#     def forward(self, x):
+#         """Forward propagation through a Ghost Bottleneck layer with skip connection."""
+#         y = self.cv1(x)
+#         return torch.cat((y, self.cv2(y)), 1)
 
 
 class RepConv(nn.Module):
@@ -306,19 +319,37 @@ class SpatialAttention(nn.Module):
         return x * self.act(self.cv1(torch.cat([torch.mean(x, 1, keepdim=True), torch.max(x, 1, keepdim=True)[0]], 1)))
 
 
-class CBAM(nn.Module):
-    """Convolutional Block Attention Module."""
+# class CBAM(nn.Module):
+#     """Convolutional Block Attention Module."""
 
-    def __init__(self, c1, kernel_size=7):
-        """Initialize CBAM with given input channel (c1) and kernel size."""
+#     def __init__(self, c1, kernel_size=7):
+#         """Initialize CBAM with given input channel (c1) and kernel size."""
+#         super().__init__()
+#         self.channel_attention = ChannelAttention(c1)
+#         self.spatial_attention = SpatialAttention(kernel_size)
+
+#     def forward(self, x):
+#         """Applies the forward pass through C1 module."""
+#         return self.spatial_attention(self.channel_attention(x))
+
+class CBAM(nn.Module):
+    """Squeeze-and-Excitation Block."""
+    def __init__(self, c1, r=16):  # ch_in, reduction
         super().__init__()
-        self.channel_attention = ChannelAttention(c1)
-        self.spatial_attention = SpatialAttention(kernel_size)
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(c1, c1 // r, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(c1 // r, c1, bias=False),
+            nn.Sigmoid(),
+        )
 
     def forward(self, x):
-        """Applies the forward pass through C1 module."""
-        return self.spatial_attention(self.channel_attention(x))
-
+        """Apply SE Block."""
+        b, c, _, _ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1, 1)
+        return x * y.expand_as(x)
 
 class Concat(nn.Module):
     """Concatenate a list of tensors along dimension."""
