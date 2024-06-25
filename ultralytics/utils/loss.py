@@ -65,7 +65,7 @@ class FocalLoss(nn.Module):
 
         # Apply size-aware weighting
         weighted_focal_loss = weights * focal_loss
-
+        print("loss+update")
         return weighted_focal_loss.mean()
 
 def compute_bounding_box_areas(targets):
