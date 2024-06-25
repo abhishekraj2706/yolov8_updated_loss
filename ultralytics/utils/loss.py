@@ -65,7 +65,7 @@ class FocalLoss(nn.Module):
 
         # Apply size-aware weighting
         weighted_focal_loss = weights * focal_loss
-        print("loss+update")
+        print("focal loss")
         return weighted_focal_loss.mean()
 
 def compute_bounding_box_areas(targets):
@@ -79,7 +79,7 @@ def compute_bounding_box_areas(targets):
 
     # Compute the areas
     areas = (x2 - x1) * (y2 - y1)
-
+    print("bb")
     return areas
 
 # class VarifocalLoss(nn.Module):
@@ -168,6 +168,7 @@ class BboxLoss(nn.Module):
         tr = tl + 1  # target right
         wl = tr - target  # weight left
         wr = 1 - wl  # weight right
+        print("df")
         return (
             F.cross_entropy(pred_dist, tl.view(-1), reduction="none").view(tl.shape) * wl
             + F.cross_entropy(pred_dist, tr.view(-1), reduction="none").view(tl.shape) * wr
@@ -194,7 +195,7 @@ class RotatedBboxLoss(BboxLoss):
             loss_dfl = loss_dfl.sum() / target_scores_sum
         else:
             loss_dfl = torch.tensor(0.0).to(pred_dist.device)
-
+        print("rbl")
         return loss_iou, loss_dfl
 
 
@@ -212,6 +213,7 @@ class KeypointLoss(nn.Module):
         kpt_loss_factor = kpt_mask.shape[1] / (torch.sum(kpt_mask != 0, dim=1) + 1e-9)
         # e = d / (2 * (area * self.sigmas) ** 2 + 1e-9)  # from formula
         e = d / ((2 * self.sigmas).pow(2) * (area + 1e-9) * 2)  # from cocoeval
+        print("kpl")
         return (kpt_loss_factor.view(-1, 1) * ((1 - torch.exp(-e)) * kpt_mask)).mean()
 
 
@@ -253,6 +255,7 @@ class v8DetectionLoss:
                 if n:
                     out[j, :n] = targets[matches, 1:]
             out[..., 1:5] = xywh2xyxy(out[..., 1:5].mul_(scale_tensor))
+            print("v8")
         return out
 
     def bbox_decode(self, anchor_points, pred_dist):
@@ -314,7 +317,7 @@ class v8DetectionLoss:
         loss[0] *= self.hyp.box  # box gain
         loss[1] *= self.hyp.cls  # cls gain
         loss[2] *= self.hyp.dfl  # dfl gain
-
+        print("bboxdecode")
         return loss.sum() * batch_size, loss.detach()  # loss(box, cls, dfl)
 
 
@@ -406,7 +409,7 @@ class v8SegmentationLoss(v8DetectionLoss):
         loss[1] *= self.hyp.box  # seg gain
         loss[2] *= self.hyp.cls  # cls gain
         loss[3] *= self.hyp.dfl  # dfl gain
-
+        print("segloss")
         return loss.sum() * batch_size, loss.detach()  # loss(box, cls, dfl)
 
     @staticmethod
@@ -497,7 +500,7 @@ class v8SegmentationLoss(v8DetectionLoss):
             # WARNING: lines below prevents Multi-GPU DDP 'unused gradient' PyTorch errors, do not remove
             else:
                 loss += (proto * 0).sum() + (pred_masks * 0).sum()  # inf sums may lead to nan loss
-
+        print("seg_focas")
         return loss / fg_mask.sum()
 
 
@@ -587,6 +590,7 @@ class v8PoseLoss(v8DetectionLoss):
         y[..., :2] *= 2.0
         y[..., 0] += anchor_points[:, [0]] - 0.5
         y[..., 1] += anchor_points[:, [1]] - 0.5
+        print("key")
         return y
 
     def calculate_keypoints_loss(
