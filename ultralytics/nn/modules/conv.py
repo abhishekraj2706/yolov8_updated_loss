@@ -33,58 +33,26 @@ def autopad(k, p=None, d=1):  # kernel, padding, dilation
         p = k // 2 if isinstance(k, int) else [x // 2 for x in k]  # auto-pad
     return p
 
-class SEBlock(nn.Module):
-    def __init__(self, c, r=16):
-        super().__init__()
-        self.squeeze = nn.AdaptiveAvgPool2d(1)
-        self.excitation = nn.Sequential(
-            nn.Linear(c, c // r, bias=False),
-            nn.ReLU(inplace=True),
-            nn.Linear(c // r, c, bias=False),
-            nn.Sigmoid()
-        )
-
-    def forward(self, x):
-        bs, c, _, _ = x.shape
-        y = self.squeeze(x).view(bs, c)
-        y = self.excitation(y).view(bs, c, 1, 1)
-        return x * y.expand_as(x)
 
 class Conv(nn.Module):
-    default_act = nn.SiLU()
+    """Standard convolution with args(ch_in, ch_out, kernel, stride, padding, groups, dilation, activation)."""
 
-    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True, se_ratio=16):
+    default_act = nn.SiLU()  # default activation
+
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True):
+        """Initialize Conv layer with given arguments including activation."""
         super().__init__()
         self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
         self.bn = nn.BatchNorm2d(c2)
         self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
-        self.se = SEBlock(c2, se_ratio)
 
     def forward(self, x):
-        x = self.act(self.bn(self.conv(x)))
-        return self.se(x)
+        """Apply convolution, batch normalization and activation to input tensor."""
+        return self.act(self.bn(self.conv(x)))
 
     def forward_fuse(self, x):
-        return self.se(self.act(self.conv(x)))
-# class Conv(nn.Module):
-#     """Standard convolution with args(ch_in, ch_out, kernel, stride, padding, groups, dilation, activation)."""
-
-#     default_act = nn.SiLU()  # default activation
-
-#     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True):
-#         """Initialize Conv layer with given arguments including activation."""
-#         super().__init__()
-#         self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
-#         self.bn = nn.BatchNorm2d(c2)
-#         self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
-
-#     def forward(self, x):
-#         """Apply convolution, batch normalization and activation to input tensor."""
-#         return self.act(self.bn(self.conv(x)))
-
-#     def forward_fuse(self, x):
-#         """Perform transposed convolution of 2D data."""
-#         return self.act(self.conv(x))
+        """Perform transposed convolution of 2D data."""
+        return self.act(self.conv(x))
 
 
 class Conv2(Conv):
