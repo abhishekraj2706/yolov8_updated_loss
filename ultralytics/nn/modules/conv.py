@@ -46,10 +46,8 @@ class Conv(nn.Module):
         super().__init__()
         self.resnet_layer = resnet_layer
 
-        if resnet_layer is None:
-            self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
-        else:
-            self.conv = resnet_layer
+
+        self.conv = resnet_layer
 
         self.bn = nn.BatchNorm2d(c2)
         self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
